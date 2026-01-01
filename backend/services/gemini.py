@@ -55,7 +55,7 @@ Always output valid JSON only. Never include markdown code blocks or explanation
 
 class GeminiService:
     def __init__(self):
-        api_key = "AIzaSyCcDlUbAltl6R9qRlsiy6trunH5gBA9c5g"
+        api_key = "AIzaSyBO7sonL9NXkyYtYnCvPaPc-JrOC2crNCc"
         
         genai.configure(api_key=api_key)
         

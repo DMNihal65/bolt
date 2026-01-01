@@ -1,12 +1,33 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from api.routes import router as api_router
+from services.database import get_pool, close_pool
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Bolt Clone API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager for the app - handles startup and shutdown"""
+    # Startup: Initialize database connection
+    try:
+        await get_pool()
+        print("✓ Database connection established")
+    except Exception as e:
+        print(f"⚠ Database connection failed: {e}")
+        print("  (App will run without persistence)")
+    
+    yield
+    
+    # Shutdown: Close database connection
+    await close_pool()
+    print("✓ Database connection closed")
+
+
+app = FastAPI(title="Bolt Clone API", lifespan=lifespan)
 
 # Configure CORS
 app.add_middleware(

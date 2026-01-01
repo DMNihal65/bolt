@@ -1,217 +1,168 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import CodeEditor from './components/Editor/CodeEditor';
 import FileTree from './components/Sidebar/FileTree';
 import Terminal from './components/Terminal/Terminal';
 import Preview from './components/Preview/Preview';
 import Chat from './components/Sidebar/Chat';
+import ProjectSelector from './components/Sidebar/ProjectSelector';
 import { webContainer } from './lib/webcontainer';
 import { useFileStore } from './store/fileStore';
+import { useChatStore } from './store/chatStore';
 import { useTerminalStore } from './store/terminalStore';
-
-// Vite + React starter template
-const STARTER_FILES = {
-  'package.json': {
-    file: {
-      contents: JSON.stringify({
-        name: "vite-react-app",
-        private: true,
-        version: "0.0.0",
-        type: "module",
-        scripts: {
-          dev: "vite",
-          build: "vite build",
-          preview: "vite preview"
-        },
-        dependencies: {
-          react: "^18.2.0",
-          "react-dom": "^18.2.0"
-        },
-        devDependencies: {
-          "@vitejs/plugin-react": "^4.0.0",
-          vite: "^4.4.0"
-        }
-      }, null, 2)
-    }
-  },
-  'vite.config.js': {
-    file: {
-      contents: `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-})
-`
-    }
-  },
-  'index.html': {
-    file: {
-      contents: `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
-`
-    }
-  },
-  'src': {
-    directory: {
-      'main.jsx': {
-        file: {
-          contents: `import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
-import './index.css'
-
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
-`
-        }
-      },
-      'App.jsx': {
-        file: {
-          contents: `import { useState } from 'react'
-import './App.css'
+import { useProjectStore } from './store/projectStore';
+import { STARTER_TEMPLATE, flattenFiles } from './templates/starter';
 
 function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <div className="app">
-      <h1>Welcome to Bolt Clone!</h1>
-      <p>Edit src/App.jsx and save to see changes.</p>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          Count is {count}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-export default App
-`
-        }
-      },
-      'App.css': {
-        file: {
-          contents: `.app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
-  font-family: Inter, system-ui, sans-serif;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.card {
-  padding: 2em;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a2e;
-  color: white;
-  cursor: pointer;
-  transition: all 0.25s;
-}
-
-button:hover {
-  background-color: #2d2d5a;
-  border-color: #646cff;
-}
-
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-`
-        }
-      },
-      'index.css': {
-        file: {
-          contents: `:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #0f0f23;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  min-height: 100vh;
-  display: flex;
-  place-items: center;
-}
-
-#root {
-  width: 100%;
-}
-`
-        }
-      }
-    }
-  }
-};
-
-// Flatten files for the store
-const flattenFiles = (files, prefix = '') => {
-  const result = {};
-  for (const [name, data] of Object.entries(files)) {
-    const path = prefix ? `${prefix}/${name}` : name;
-    if (data.file) {
-      result[path] = { content: data.file.contents };
-    } else if (data.directory) {
-      Object.assign(result, flattenFiles(data.directory, path));
-    }
-  }
-  return result;
-};
-
-function App() {
-  const { setFiles } = useFileStore();
+  const { files, setFiles, getFileContents } = useFileStore();
+  const { messages } = useChatStore();
   const { terminal } = useTerminalStore();
+  const { currentProjectId, saveProject, setUnsavedChanges } = useProjectStore();
+
   const [previewUrl, setPreviewUrl] = useState('');
   const [isBooting, setIsBooting] = useState(true);
   const [bootMessage, setBootMessage] = useState('Initializing WebContainer...');
+  const [webContainerInstance, setWebContainerInstance] = useState(null);
 
+  // Convert flat files back to WebContainer mount format
+  const filesToMountFormat = useCallback((flatFiles) => {
+    const result = {};
+
+    for (const [path, data] of Object.entries(flatFiles)) {
+      const content = typeof data === 'string' ? data : data.content || '';
+      const parts = path.split('/');
+      let current = result;
+
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!current[parts[i]]) {
+          current[parts[i]] = { directory: {} };
+        }
+        current = current[parts[i]].directory;
+      }
+
+      current[parts[parts.length - 1]] = { file: { contents: content } };
+    }
+
+    return result;
+  }, []);
+
+  // Boot WebContainer with starter template
+  const bootWithTemplate = useCallback(async (wc) => {
+    setBootMessage('Mounting project files...');
+
+    // Mount starter template
+    await wc.mount(STARTER_TEMPLATE);
+
+    // Update store with flattened files
+    const flatFiles = flattenFiles(STARTER_TEMPLATE);
+    setFiles(flatFiles);
+
+    setBootMessage('Installing dependencies...');
+    setIsBooting(false);
+
+    // Install dependencies
+    const installProcess = await wc.spawn('npm', ['install']);
+
+    installProcess.output.pipeTo(new WritableStream({
+      write(data) {
+        if (terminal) {
+          terminal.write(data);
+        }
+      }
+    }));
+
+    const installExitCode = await installProcess.exit;
+
+    if (installExitCode === 0) {
+      if (terminal) {
+        terminal.writeln('\n\x1b[1;32m✓ Dependencies installed\x1b[0m');
+        terminal.writeln('\x1b[1;34m▶ Starting dev server...\x1b[0m\n');
+      }
+
+      // Start dev server
+      const startProcess = await wc.spawn('npm', ['run', 'dev']);
+
+      startProcess.output.pipeTo(new WritableStream({
+        write(data) {
+          if (terminal) {
+            terminal.write(data);
+          }
+        }
+      }));
+    } else {
+      if (terminal) {
+        terminal.writeln('\n\x1b[1;31m✗ Failed to install dependencies\x1b[0m');
+      }
+    }
+  }, [terminal, setFiles]);
+
+  // Load a saved project
+  const handleProjectLoad = useCallback(async (data) => {
+    if (!webContainerInstance) return;
+
+    if (!data) {
+      // New project - reset to starter template
+      if (terminal) {
+        terminal.writeln('\n\x1b[1;33m📁 Starting new project...\x1b[0m');
+      }
+      await bootWithTemplate(webContainerInstance);
+      return;
+    }
+
+    // Load saved project
+    if (terminal) {
+      terminal.writeln(`\n\x1b[1;33m📁 Loading project: ${data.project.name}...\x1b[0m`);
+    }
+
+    // Convert saved files to store format
+    const storeFiles = {};
+    for (const [path, content] of Object.entries(data.files || {})) {
+      storeFiles[path] = { content };
+    }
+    setFiles(storeFiles);
+
+    // Mount files in WebContainer
+    const mountFormat = filesToMountFormat(data.files || {});
+    await webContainerInstance.mount(mountFormat);
+
+    // Load chat messages (the Chat component will pick these up)
+    if (data.messages && data.messages.length > 0) {
+      // Chat store will be updated separately
+    }
+
+    if (terminal) {
+      terminal.writeln(`\x1b[1;32m✓ Project loaded with ${Object.keys(data.files || {}).length} files\x1b[0m`);
+    }
+  }, [webContainerInstance, terminal, setFiles, filesToMountFormat, bootWithTemplate]);
+
+  // Auto-save debounced
+  useEffect(() => {
+    if (!currentProjectId) return;
+
+    const saveTimer = setTimeout(() => {
+      const fileContents = getFileContents();
+      const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
+
+      saveProject(fileContents, chatMessages, []);
+      console.log('✓ Auto-saved project');
+    }, 5000); // Save 5 seconds after changes
+
+    return () => clearTimeout(saveTimer);
+  }, [files, messages, currentProjectId]);
+
+  // Mark unsaved changes
+  useEffect(() => {
+    if (currentProjectId) {
+      setUnsavedChanges(true);
+    }
+  }, [files, messages]);
+
+  // Initial boot
   useEffect(() => {
     const boot = async () => {
       try {
         setBootMessage('Booting WebContainer...');
         const wc = await webContainer.boot();
+        setWebContainerInstance(wc);
 
         // Listen for server-ready event
         wc.on('server-ready', (port, url) => {
@@ -219,52 +170,7 @@ function App() {
           setPreviewUrl(url);
         });
 
-        setBootMessage('Mounting project files...');
-
-        // Mount starter files
-        await wc.mount(STARTER_FILES);
-
-        // Update store with flattened files
-        const flatFiles = flattenFiles(STARTER_FILES);
-        setFiles(flatFiles);
-
-        setBootMessage('Installing dependencies...');
-        setIsBooting(false);
-
-        // Install dependencies
-        const installProcess = await wc.spawn('npm', ['install']);
-
-        installProcess.output.pipeTo(new WritableStream({
-          write(data) {
-            if (terminal) {
-              terminal.write(data);
-            }
-          }
-        }));
-
-        const installExitCode = await installProcess.exit;
-
-        if (installExitCode === 0) {
-          if (terminal) {
-            terminal.writeln('\n\x1b[1;32m✓ Dependencies installed\x1b[0m');
-            terminal.writeln('\x1b[1;34m▶ Starting dev server...\x1b[0m\n');
-          }
-
-          // Start dev server
-          const startProcess = await wc.spawn('npm', ['run', 'dev']);
-
-          startProcess.output.pipeTo(new WritableStream({
-            write(data) {
-              if (terminal) {
-                terminal.write(data);
-              }
-            }
-          }));
-        } else {
-          if (terminal) {
-            terminal.writeln('\n\x1b[1;31m✗ Failed to install dependencies\x1b[0m');
-          }
-        }
+        await bootWithTemplate(wc);
 
       } catch (error) {
         console.error('Boot failed:', error);
@@ -280,10 +186,18 @@ function App() {
     <div className="flex h-screen w-screen bg-[#1e1e1e] text-white overflow-hidden">
       {/* Sidebar */}
       <div className="w-80 flex-shrink-0 border-r border-gray-700 flex flex-col">
-        <div className="h-2/5 border-b border-gray-700 overflow-auto">
+        {/* Project Selector */}
+        <div className="p-2 border-b border-gray-700">
+          <ProjectSelector onProjectLoad={handleProjectLoad} />
+        </div>
+
+        {/* File Tree */}
+        <div className="h-1/3 border-b border-gray-700 overflow-auto">
           <FileTree />
         </div>
-        <div className="h-3/5 overflow-hidden">
+
+        {/* Chat */}
+        <div className="flex-1 overflow-hidden">
           <Chat />
         </div>
       </div>
