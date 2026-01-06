@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from fastapi.responses import JSONResponse
-from services.agent import get_agent
+from services.agents.orchestrator import get_orchestrator
 from services.project_service import get_project_service
 import json
 import traceback
@@ -43,6 +43,7 @@ class SaveProjectRequest(BaseModel):
 
 class SaveFilesRequest(BaseModel):
     files: Dict[str, str]
+    messages: List[Dict[str, Any]]
 
 class SaveChatRequest(BaseModel):
     messages: List[Dict[str, Any]]
@@ -68,10 +69,10 @@ def normalize_files(files: Optional[Dict[str, Any]]) -> Dict[str, str]:
 async def create_plan(request: PlanRequest):
     """Create an execution plan for a user request"""
     try:
-        agent = get_agent()
+        orchestrator = get_orchestrator()
         files = normalize_files(request.currentFiles)
         
-        plan = await agent.plan(request.request, files)
+        plan = await orchestrator.plan(request.request, files)
         
         return JSONResponse(content=plan)
     except Exception as e:
@@ -82,13 +83,35 @@ async def create_plan(request: PlanRequest):
         )
 
 
+class FixErrorRequest(BaseModel):
+    error: str
+    file: str
+    currentContent: str
+
 @router.post("/execute-task")
 async def execute_task(request: ExecuteTaskRequest):
     """Execute a single task from the plan"""
     try:
-        agent = get_agent()
+        orchestrator = get_orchestrator()
         
-        result = await agent.execute_task(request.task, request.currentContent)
+        result = await orchestrator.execute_task(request.task, request.currentContent)
+        
+        return JSONResponse(content=result)
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=200
+        )
+
+
+@router.post("/fix-error")
+async def fix_error(request: FixErrorRequest):
+    """Fix an error in a file"""
+    try:
+        orchestrator = get_orchestrator()
+        
+        result = await orchestrator.handle_error(request.error, request.file, request.currentContent)
         
         return JSONResponse(content=result)
     except Exception as e:
@@ -103,9 +126,9 @@ async def execute_task(request: ExecuteTaskRequest):
 async def handle_clarification(request: ClarifyRequest):
     """Handle user's response to a clarification question"""
     try:
-        agent = get_agent()
+        orchestrator = get_orchestrator()
         
-        result = await agent.handle_clarification(request.response)
+        result = await orchestrator.handle_clarification(request.response)
         
         return JSONResponse(content=result)
     except Exception as e:
@@ -120,8 +143,8 @@ async def handle_clarification(request: ClarifyRequest):
 async def reset_agent():
     """Reset the agent state"""
     try:
-        agent = get_agent()
-        agent.reset()
+        orchestrator = get_orchestrator()
+        orchestrator.reset()
         return JSONResponse(content={"status": "ok"})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=200)
@@ -131,8 +154,8 @@ async def reset_agent():
 async def get_rate_limit_status():
     """Get current rate limiter status"""
     try:
-        agent = get_agent()
-        status = agent.get_rate_limit_status()
+        orchestrator = get_orchestrator()
+        status = orchestrator.get_rate_limit_status()
         return JSONResponse(content=status)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=200)
@@ -150,10 +173,10 @@ async def generate_code(request: ChatRequest):
         last_message = request.messages[-1].content
         files = normalize_files(request.currentFiles)
         
-        agent = get_agent()
+        orchestrator = get_orchestrator()
         
         # First, create a plan
-        plan = await agent.plan(last_message, files)
+        plan = await orchestrator.plan(last_message, files)
         
         # If clarification needed, return immediately
         if plan.get('needs_clarification'):
@@ -167,7 +190,7 @@ async def generate_code(request: ChatRequest):
         results = []
         for task in plan.get('tasks', []):
             current_content = files.get(task.get('file'), '')
-            result = await agent.execute_task(task, current_content)
+            result = await orchestrator.execute_task(task, current_content)
             results.append(result)
             
             # Update files dict for next task
